@@ -141,10 +141,23 @@ def test_cli_detect_rejects_unknown_method(tmp_path):
     assert "spectral" in result.stderr.lower()
 
 
-def test_cli_detect_scaleup_stub_writes_schema_valid_report(tmp_path):
+def test_cli_detect_scaleup_writes_schema_valid_report(tmp_path, monkeypatch):
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+
+    from mithridatium import cli
+    from mithridatium.utils import get_preprocess_config
+
     fake_model = tmp_path / "fake.pth"
     fake_model.write_bytes(b"not a real checkpoint")
     out_path = tmp_path / "detect_scaleup.json"
+
+    cfg = get_preprocess_config("cifar10")
+    data = TensorDataset(torch.randn(32, 3, 32, 32), torch.zeros(32, dtype=torch.long))
+    toy = torch.nn.Sequential(torch.nn.Flatten(), torch.nn.Linear(3 * 32 * 32, 10))
+
+    monkeypatch.setattr(cli.loader, "detect_and_build", lambda *a, **k: (toy, None))
+    monkeypatch.setattr(cli.utils, "dataloader_for", lambda *a, **k: (DataLoader(data, batch_size=16), cfg))
 
     result = runner.invoke(
         app,
@@ -170,9 +183,10 @@ def test_cli_detect_scaleup_stub_writes_schema_valid_report(tmp_path):
     results = payload["results"]
     assert results["mode"] == "input-level"
     assert results["method"] == "scaleup"
-    assert results["status"] == "stub_complete"
     assert results["num_inputs"] == 32
-    assert results["parameters"]["scales"]
+    assert len(results["per_sample"]) == 32
+    assert results["parameters"]["scales"] == [3.0, 5.0, 7.0, 9.0, 11.0]
+
 
 
 def test_cli_detect_refuses_overwrite_without_force(tmp_path):
