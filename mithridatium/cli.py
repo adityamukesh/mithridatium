@@ -44,6 +44,20 @@ REPAIR_METHODS = {"lmr"}
 
 DETECT_METHODS = {"scaleup"}
 
+def _check_out_writable(out_path: str, force: bool) -> None:
+    """Exit early if out_path exists and --force wasn't given. "-" (stdout) always passes."""
+    if out_path == "-":
+        return
+
+    path = Path(out_path)
+    # Checks if file exists and prevents overwriting. Use --force to override.
+    if path.exists() and not force:
+        typer.secho(
+            f"Error: output file already exists: {path}.",
+        )
+        raise typer.Exit(code=EXIT_CANT_CREATE)
+
+
 def _write_json(obj: dict, out_path: str, force: bool) -> None:
     """
     Write JSON to a file or to stdout.
@@ -56,16 +70,10 @@ def _write_json(obj: dict, out_path: str, force: bool) -> None:
         json.dump(obj, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return
-    
+
+    _check_out_writable(out_path, force)
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Checks if file exists and prevents overwriting. Use --force to override.
-    if path.exists() and not force:
-        typer.secho(
-            f"Error: output file already exists: {path}.",
-        )
-        raise typer.Exit(code=EXIT_CANT_CREATE)
 
     with path.open("w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
@@ -609,7 +617,7 @@ def detect(
         typer.secho(f"Error: --scaleup-scales must include only numbers greater than 0, got {scaleup_scales}.", err=True)
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
-
+    _check_out_writable(out, force)
 
     print(f"[cli] loading model from {p}…")
 
