@@ -80,5 +80,4 @@ markers = [
 ]
 
 [tool.codespell]
-skip = "*.pth,*.npy,data/*,models/*,reports/*,docs/assets/*,*.egg-info,./data/*,./models/*,./reports/*,./docs/assets/*"
-# ignore-words-list = ""
+skip = "*.pth,*.npy,data/*,models/*,reports/*,docs/assets/*,*.egg-info"
