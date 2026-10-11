@@ -80,4 +80,4 @@ markers = [
 ]
 
 [tool.codespell]
-skip = "*.pth,*.npy,data/*,models/*,reports/*,docs/assets/*,*.egg-info"
+skip = "*.pth,*.npy,data,models,reports,*/docs/assets,*.egg-info"
