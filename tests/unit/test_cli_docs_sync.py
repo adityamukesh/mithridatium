@@ -12,6 +12,7 @@ hard-coded snapshots.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -38,13 +39,29 @@ COMMAND_DOCS_MAP = {
 }
 
 
+def _documented_flags(docs: str) -> set[str]:
+    return set(re.findall(r"(?<![\w-])--[a-zA-Z0-9][a-zA-Z0-9_-]*", docs))
+
+
+@pytest.mark.parametrize(
+    "docs,expected",
+    [
+        ("`--model-name`", {"--model-name"}),
+        ("`--model` / `-m` and --seed=42", {"--model", "--seed"}),
+        ("<!-- internal note -->", set()),
+    ],
+)
+def test_documented_flags_match_complete_option_names(docs: str, expected: set[str]) -> None:
+    assert _documented_flags(docs) == expected
+
+
 def _command_option_names(command_name: str) -> list[str]:
     root = typer.main.get_command(app)
     subcommand = root.get_command(None, command_name)
     assert subcommand is not None, f"subcommand '{command_name}' not found on app"
     names: list[str] = []
     for param in subcommand.params:
-        for opt in param.opts:
+        for opt in [*param.opts, *getattr(param, "secondary_opts", [])]:
             if opt.startswith("--"):
                 names.append(opt)
     return sorted(set(names))
@@ -67,9 +84,9 @@ def _defense_doc_text(defense: str) -> str:
 @pytest.mark.parametrize("defense,prefix", sorted(DEFENSE_PREFIXES.items()))
 def test_audit_defense_flags_are_documented(defense: str, prefix: str) -> None:
     flags = _flags_for_defense(prefix)
-    assert flags, f"no CLI options found for {defense}"
     docs = _defense_doc_text(defense)
-    missing = [flag for flag in flags if flag not in docs]
+    documented_flags = _documented_flags(docs)
+    missing = [flag for flag in flags if flag not in documented_flags]
     assert missing == [], (
         f"{defense} CLI flags missing from docs/defenses/{defense}.md: "
         + ", ".join(missing)
@@ -82,7 +99,8 @@ def test_command_flags_are_documented(command_name: str, doc_path: Path) -> None
     assert flags, f"no CLI options found for {command_name}"
     assert doc_path.is_file(), f"missing docs page for {command_name}: {doc_path}"
     docs = doc_path.read_text(encoding="utf-8")
-    missing = [flag for flag in flags if flag not in docs]
+    documented_flags = _documented_flags(docs)
+    missing = [flag for flag in flags if flag not in documented_flags]
     assert missing == [], (
         f"'{command_name}' CLI flags missing from {doc_path.relative_to(PROJECT_ROOT)}: "
         + ", ".join(missing)
