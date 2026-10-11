@@ -24,6 +24,7 @@ from mithridatium.loader import validate_model
 from mithridatium.defenses.aeva import run_aeva
 from mithridatium.defense_config import apply_freeeagle_cli_options
 from mithridatium.detect.scaleup import run_scaleup
+from mithridatium.repair import repair_lmr_stub
 
 try:
     VERSION = package_version("mithridatium")
@@ -39,6 +40,7 @@ EXIT_IO_ERROR = 74        # input exists but can't be opened/read
 app = typer.Typer(help="Mithridatium CLI - verify pretrained model integrity")
 
 DEFENSES = {"freeeagle", "aeva", "mmbd", "strip"}
+REPAIR_METHODS = {"lmr"}
 
 DETECT_METHODS = {"scaleup"}
 
@@ -467,7 +469,7 @@ def detect(
             help="The dataset name. E.g. 'cifar10', 'cifar10_for_imagenet', 'imagenet_subset', or 'imagenet'.",
         ),
         method: str = typer.Option(
-            "",
+            "scaleup",
             "--method",
             "-M",
             help="The method name. E.g. 'scaleup'.",
@@ -561,15 +563,15 @@ def detect(
         n_s = int(num_samples)
 
     except ValueError:
-        typer.secho(f"Error: --num-samples must be an integer, got {num_samples}.", err=True)
+        typer.secho(f"Error: --scaleup-num-samples must be an integer, got {num_samples}.", err=True)
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     if n_s <= 0:
-        typer.secho(f"Error: --num-samples must be positive, got {num_samples}.", err=True)
+        typer.secho(f"Error: --scaleup-num-samples must be positive, got {num_samples}.", err=True)
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     elif n_s >= Temporary_Value__Max_Samples:
-        typer.secho(f"Error: --num-samples must be under {Temporary_Value__Max_Samples}, got {num_samples}.", err=True)
+        typer.secho(f"Error: --scaleup-num-samples must be under {Temporary_Value__Max_Samples}, got {num_samples}.", err=True)
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
 
@@ -580,7 +582,7 @@ def detect(
         scaleup_threshold_converted = float(scaleup_threshold)
 
     except ValueError:
-        typer.secho(f"Error: --num-samples must be a float, got {scaleup_threshold}.", err=True)
+        typer.secho(f"Error: --scaleup-threshold must be a float, got {scaleup_threshold}.", err=True)
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     if scaleup_threshold_converted <= 0 or scaleup_threshold_converted > 1.0:
@@ -701,6 +703,86 @@ def ui(
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     launch_ui(host=host, port=port, share=share)
+
+
+@app.command("repair")
+def repair(
+    model: str = typer.Option(
+        "models/resnet18.pth", "--model", "-m",
+        help="The model path (.pth or .pt). E.g. 'models/resnet18.pth'.",
+    ),
+    method: str = typer.Option(
+        "lmr", "--method", "-M",
+        help="The repair method to run. E.g. 'lmr'.",
+    ),
+    data: str = typer.Option(
+        "cifar10", "--data", "-d",
+        help="The dataset name. E.g. 'cifar10' or 'imagenet_subset'.",
+    ),
+    clean_samples: int = typer.Option(
+        500, "--clean-samples", "-c",
+        help="Number of clean samples the repair method may use.",
+    ),
+    seed: int = typer.Option(
+        None, "--seed", "-s",
+        help="Random seed for reproducibility.",
+    ),
+    out: Path = typer.Option(
+        Path("models/repaired.pth"), "--out", "-o",
+        help="Path for the repaired checkpoint (.pth or .pt).",
+    ),
+    report: Path = typer.Option(
+        None, "--report", "-r",
+        help='Path for the JSON report. Defaults to a sidecar beside --out. Use "-" for stdout.',
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Overwrite the checkpoint or report if it already exists.",
+    ),
+    lmr_target_class: int = typer.Option(
+        None, "--lmr-target-class",
+        help="LMR: target class to repair. Omit to infer.",
+    ),
+    lmr_prune_ratio: float = typer.Option(
+        None, "--lmr-prune-ratio",
+        help="LMR: fraction of most-moved columns to prune.",
+    ),
+):
+
+# Look through this and proably make better so we can scale it when we add more
+# have it read the method then go from there
+# check
+    if method.strip().lower() not in REPAIR_METHODS:
+        typer.secho(
+            f"Error: Unsupported repair method '{method}'. "
+            f"Supported methods: {', '.join(sorted(REPAIR_METHODS))}",
+            err=True,
+        )
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    model_path = Path(model)
+    if not model_path.exists() or not model_path.is_file():
+        typer.secho(
+            f"Error: model path not found or not a file: {model_path}",
+            err=True,
+        )
+        raise typer.Exit(code=EXIT_NO_INPUT)
+
+    try:
+        with model_path.open("rb"):
+            pass
+    except OSError as ex:
+        typer.secho(
+            f"Error: model file could not be opened: {model_path}\nReason: {ex}", err=True
+        )
+        raise typer.Exit(code=EXIT_IO_ERROR)
+    
+    report_path = report if report else out.with_suffix(".json")
+
+    repair_lmr_stub(model=model, out=str(out), report=str(report_path), dataset=data)
+
+    typer.secho(f"\n[cli] Repair stub method={method} model={model} out={out}")
+
 
 if __name__ == "__main__":
     app()
