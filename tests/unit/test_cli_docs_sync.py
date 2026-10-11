@@ -67,6 +67,7 @@ def _defense_doc_text(defense: str) -> str:
 @pytest.mark.parametrize("defense,prefix", sorted(DEFENSE_PREFIXES.items()))
 def test_audit_defense_flags_are_documented(defense: str, prefix: str) -> None:
     flags = _flags_for_defense(prefix)
+    assert flags, f"no CLI options found for {defense}"
     docs = _defense_doc_text(defense)
     missing = [flag for flag in flags if flag not in docs]
     assert missing == [], (
@@ -78,6 +79,7 @@ def test_audit_defense_flags_are_documented(defense: str, prefix: str) -> None:
 @pytest.mark.parametrize("command_name,doc_path", sorted(COMMAND_DOCS_MAP.items()))
 def test_command_flags_are_documented(command_name: str, doc_path: Path) -> None:
     flags = _command_option_names(command_name)
+    assert flags, f"no CLI options found for {command_name}"
     assert doc_path.is_file(), f"missing docs page for {command_name}: {doc_path}"
     docs = doc_path.read_text(encoding="utf-8")
     missing = [flag for flag in flags if flag not in docs]
