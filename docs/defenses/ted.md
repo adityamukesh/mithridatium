@@ -1,8 +1,6 @@
 # TED
 
-White-box, input-level detection, planned as `mithridatium detect --method ted`
-(issue #123). **Not implemented yet.** This page describes the method and the
-plan so the implementation has a fixed target.
+White-box, input-level detection: `mithridatium detect --method ted` (issue #123).
 
 Mo et al., *Robust Backdoor Detection for Deep Learning via Topological
 Evolution Dynamics*, IEEE S&P 2024. <https://arxiv.org/abs/2312.02673>
@@ -39,15 +37,22 @@ What the reference code fixes that the paper leaves open:
 clean, labelled data from the model's own distribution, at inference time.
 SCALE-UP needs neither, so TED cannot run on a query-only model.
 
-## Running it (planned)
+## Running it
 
 ```bash
 mithridatium detect --model models/resnet18_poison.pth --method ted \
   --data cifar10 --out reports/detect_ted.json
 ```
 
-Proposed flags, following the `--scaleup-*` naming. Defaults are the reference
-code's for CIFAR-10, not values the paper fixes.
+Smoke run, with a small reference set:
+
+```bash
+mithridatium detect --model models/resnet18_poison.pth --method ted --data cifar10 \
+  --ted-num-samples 64 --ted-reference-size 200 --out -
+```
+
+Flags. Defaults are the reference code's for CIFAR-10, not values the paper
+fixes.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -56,7 +61,8 @@ code's for CIFAR-10, not values the paper fixes.
 | `--ted-contamination` | `0.01` | `alpha`: fraction of reference trajectories the threshold rejects |
 
 **Cost.** Every scored input is compared with every reference image at every
-hooked layer: 35 hook calls per forward pass on our ResNet-18. Holding all
+hooked layer: 35 hook calls per forward pass on our ResNet-18 (27 recorded,
+see Caveats). Holding all
 reference activations at 1000 images is about 0.4 GB in float32 (measured on
 `models/resnet18_clean.pth`). A smoke run needs a small reference set.
 
@@ -74,18 +80,25 @@ reports `alpha` from 1% to 5% and also a 4-sigma variant, so `0.01` is a choice.
 - **Different setting from the paper.** Its headline numbers use
   source-specific dynamic triggers on PreActResNet-18. Our checkpoints are
   torchvision ResNet-18 with a BadNets patch.
-- **Hook bookkeeping.** torchvision's `BasicBlock` calls one `ReLU` module
-  twice per forward pass (27 hooked modules, 35 calls on our ResNet-18), so
-  activations must be recorded per call, not per module, or the first call is
-  silently overwritten.
+- **Hooked layers differ from upstream.** Upstream's models use functional
+  `F.relu`, so its trajectories are non-1x1 `Conv2d` plus `Linear` only.
+  torchvision's ResNet-18 uses `nn.ReLU` modules, so ours also include ReLU
+  outputs: 27 entries per input (one per hooked module; a module called twice
+  per pass keeps its last call). Whether ReLU entries help or hurt detection is
+  untested.
+- **Each predicted class needs at least two reference samples.** Upstream's code
+  assumes a sample is its own nearest neighbour; with a single-sample class and
+  tied activations, TED fails. Not a concern with the default 1000-image
+  reference set on a trained model.
 - Local checkpoints only, since TED needs the weights.
 
-## Open questions
+## Implementation notes
 
-- Add `pyod` (and with it `scikit-learn`) as dependencies, or reimplement its
-  PCA score in `torch`? Neither is installed today.
-- What `verdict` means for an input-level method. SCALE-UP's 20% batch cutoff
-  could not tell a backdoored ResNet-18 from a clean one on clean inputs.
+- Dependencies: `pyod` (PCA detector, pulls in `scikit-learn`) and
+  `torchmetrics`, installed with mithridatium.
+- The batch `verdict` is uncalibrated: with `alpha = 0.01` and 256 clean inputs,
+  about half of clean runs flag more than `alpha`. Read `per_sample`, not
+  `verdict`.
 
 ## Licensing
 
