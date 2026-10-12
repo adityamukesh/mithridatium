@@ -15,6 +15,9 @@ dependencies = [
     "numpy",
     "scipy",
     "jsonschema",
+    "pyod>=1.1",
+    "scikit-learn",
+    "torchmetrics",
 ]
 
 [project.optional-dependencies]
