@@ -40,6 +40,7 @@ COMMAND_DOCS_MAP = {
 
 
 def _documented_flags(docs: str) -> set[str]:
+    docs = re.sub(r"<!--.*?-->", "", docs, flags=re.DOTALL)
     return set(re.findall(r"(?<![\w-])--[a-zA-Z0-9][a-zA-Z0-9_-]*", docs))
 
 
@@ -49,6 +50,10 @@ def _documented_flags(docs: str) -> set[str]:
         ("`--model-name`", {"--model-name"}),
         ("`--model` / `-m` and --seed=42", {"--model", "--seed"}),
         ("<!-- internal note -->", set()),
+        ("<!-- TODO: document --seed -->", set()),
+        ("<!--\n--seed\n--> `--model`", {"--model"}),
+        ("`--force` / `--no-force`", {"--force", "--no-force"}),
+        ("`--model-name` and `--model_path`", {"--model-name", "--model_path"}),
     ],
 )
 def test_documented_flags_match_complete_option_names(docs: str, expected: set[str]) -> None:

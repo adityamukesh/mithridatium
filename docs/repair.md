@@ -54,13 +54,13 @@ mithridatium repair \
 | `--model` / `-m` | Local checkpoint (`.pth` / `.pt`) to repair. |
 | `--method` / `-M` | Repair method (`lmr` today). |
 | `--data` / `-d` | Dataset name for clean samples (e.g. `cifar10`). |
-| `--clean-samples` / `-c` | Number of clean samples the repair method may use. |
+| `--clean-samples` / `-c` | Maximum number of clean samples to use (positive integer; default `500`). |
 | `--seed` / `-s` | Random seed for reproducibility. |
 | `--out` / `-o` | Path for the repaired output checkpoint (`.pth` / `.pt`). |
-| `--report` / `-r` | Path for the JSON report, or `-` for stdout. |
+| `--report` / `-r` | Path for the JSON report, or `-` for stdout. Defaults to a sidecar beside `--out`. |
 | `--force` / `-f` | Overwrite the checkpoint or report if it already exists. |
-| `--lmr-target-class` | LMR: target class to repair (required; automatic inference is not implemented). |
-| `--lmr-prune-ratio` | LMR: fraction of most-moved columns to prune (required). |
+| `--lmr-target-class` | LMR: zero-based target class to repair (required; must be below the model's class count). |
+| `--lmr-prune-ratio` | LMR: fraction of most-moved columns to prune (required; at least `0` and less than `1`). |
 
 ## Caveats
 
