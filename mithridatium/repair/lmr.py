@@ -194,7 +194,7 @@ def run_lmr(model, clean_loader, target_class, prune_ratio=0.10, seed=0, repair_
 
     results = {
         "method": "lmr",
-        "verdict": "repaired",
+        "verdict": "repair_applied",
         "parameters": {
             "target_class": target_class,
             "prune_ratio": prune_ratio,
