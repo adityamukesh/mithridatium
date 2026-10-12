@@ -3,6 +3,7 @@ import sys
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
+import torch
 import typer
 import ast
 import math
@@ -24,9 +25,10 @@ from mithridatium.defenses.mmbd import get_device
 from mithridatium.loader import validate_model
 from mithridatium.defenses.aeva import run_aeva
 from mithridatium.defense_config import apply_freeeagle_cli_options
-from mithridatium.repair import repair_lmr_stub
 from mithridatium.repair.clp import repair_clp
-from mithridatium.detect.scaleup import scaleup_stub_results
+from mithridatium.detect.scaleup import run_scaleup
+from mithridatium.detect.ted import ted
+from mithridatium.repair import run_lmr
 
 try:
     VERSION = package_version("mithridatium")
@@ -44,7 +46,21 @@ app = typer.Typer(help="Mithridatium CLI - verify pretrained model integrity")
 DEFENSES = {"freeeagle", "aeva", "mmbd", "strip"}
 REPAIR_METHODS = {"lmr", "clp"}
 
-DETECT_METHODS = {"scaleup"}
+DETECT_METHODS = {"scaleup", "ted"}
+
+def _check_out_writable(out_path: str, force: bool) -> None:
+    """Exit early if out_path exists and --force wasn't given. "-" (stdout) always passes."""
+    if out_path == "-":
+        return
+
+    path = Path(out_path)
+    # Checks if file exists and prevents overwriting. Use --force to override.
+    if path.exists() and not force:
+        typer.secho(
+            f"Error: output file already exists: {path}.",
+        )
+        raise typer.Exit(code=EXIT_CANT_CREATE)
+
 
 def _write_json(obj: dict, out_path: str, force: bool) -> None:
     """
@@ -58,16 +74,10 @@ def _write_json(obj: dict, out_path: str, force: bool) -> None:
         json.dump(obj, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return
-    
+
+    _check_out_writable(out_path, force)
     path = Path(out_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Checks if file exists and prevents overwriting. Use --force to override.
-    if path.exists() and not force:
-        typer.secho(
-            f"Error: output file already exists: {path}.",
-        )
-        raise typer.Exit(code=EXIT_CANT_CREATE)
 
     with path.open("w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
@@ -474,10 +484,10 @@ def detect(
             "scaleup",
             "--method",
             "-M",
-            help="The method name. E.g. 'scaleup'.",
+            help="The method name: 'scaleup' or 'ted'.",
         ),
         num_samples: str = typer.Option(
-            "5000",
+            "256",
             "--scaleup-num-samples",
             "-n",
             help="The number of images from the dataset to test on.",
@@ -488,7 +498,7 @@ def detect(
         #     help="",
         # ),
         scaleup_threshold: str = typer.Option(
-            "1.0",
+            "0.5",
             "--scaleup-threshold",
             help="The percent threshhold of distortion scalars an image must pass through to be declared poisoned.",
         ),
@@ -511,11 +521,28 @@ def detect(
             help="This allows overwriting. E.g. if the output file already exists --force will overwrite it.",
         ),
         scaleup_scales: str = typer.Option(
-            "(2,3,4,5,6,7,8,9,10,11)",
+            "(3,5,7,9,11)",
             "--scaleup-scales",
-            help='UNIMPLEMENTED! The series of value scalars to use in scaleup, e.g. "(2,3,4,5,6,7,8,9,10,11)."'
+            help='The series of value scalars to use in scaleup, e.g. "(3,5,7,9,11)."'
 
-        )
+        ),
+        ted_num_samples: int = typer.Option(
+            256,
+            "--ted-num-samples",
+            min=1,
+            help="TED: the number of test images to score.",
+        ),
+        ted_reference_size: int = typer.Option(
+            1000,
+            "--ted-reference-size",
+            min=1,
+            help="TED: the cap on known-clean reference images, drawn from the training split.",
+        ),
+        ted_contamination: float = typer.Option(
+            0.01,
+            "--ted-contamination",
+            help="TED: the fraction of clean reference inputs the threshold rejects (alpha), within 0 < alpha <= 0.5.",
+        ),
 
 
 ):
@@ -570,11 +597,11 @@ def detect(
 
     if n_s <= 0:
         typer.secho(f"Error: --scaleup-num-samples must be positive, got {num_samples}.", err=True)
-        raise typer.Exit(code=EXIT_IO_ERROR)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     elif n_s >= Temporary_Value__Max_Samples:
         typer.secho(f"Error: --scaleup-num-samples must be under {Temporary_Value__Max_Samples}, got {num_samples}.", err=True)
-        raise typer.Exit(code=EXIT_IO_ERROR)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
 
     """
@@ -589,7 +616,7 @@ def detect(
 
     if scaleup_threshold_converted <= 0 or scaleup_threshold_converted > 1.0:
         typer.secho(f"Error: --scaleup-threshold must be within 0 < T <= 1.0, got {scaleup_threshold}", err=True)
-        raise typer.Exit(code=EXIT_IO_ERROR)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
 
     """
@@ -603,24 +630,77 @@ def detect(
             if type(value) != float and type(value) != int:
                 raise TypeError
 
-    except TypeError:
+    except (TypeError, ValueError, SyntaxError):
         typer.secho(f"Error: --scaleup-scales must be a parenthesis enclosed, comma seperated list of numbers, got {scaleup_scales}", err=True)
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     if all(scalar > 0 for scalar in scaleup_scales_converted) is False:
         typer.secho(f"Error: --scaleup-scales must include only numbers greater than 0, got {scaleup_scales}.", err=True)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    """
+    Validate TED options.
+    """
+    if m == "ted":
+        if not 0 < ted_contamination <= 0.5:
+            typer.secho(f"Error: --ted-contamination must be within 0 < alpha <= 0.5, got {ted_contamination}.", err=True)
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    _check_out_writable(out, force)
+
+    try:
+        cfg = utils.get_preprocess_config(data)
+    except ValueError as ex:
+        typer.secho(f"Error: {ex}", err=True)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    print(f"[cli] loading model from {p}…")
+
+    try:
+        mdl, _ = loader.detect_and_build(str(p), num_classes=cfg.get_num_classes())
+        test_loader, config = utils.dataloader_for(data, "test", 128)
+        if m == "ted":
+            train_loader, _ = utils.dataloader_for(data, "train", 128)
+    except Exception as ex:
+        typer.secho(
+            f"Error: failed to load model '{p}'.\nReason: {ex}",
+            err=True,
+        )
         raise typer.Exit(code=EXIT_IO_ERROR)
 
+    print(f"[cli] running method={m}…")
 
+    try:
+        if m == "ted":
+            test_ds, train_ds = test_loader.dataset, train_loader.dataset
+            results = ted(
+                mdl,
+                # 2x headroom for the misclassified images ted() drops from the reference set
+                reference_data=torch.utils.data.Subset(train_ds, range(min(len(train_ds), 2 * ted_reference_size))),
+                suspect_data=torch.utils.data.Subset(test_ds, range(min(len(test_ds), ted_num_samples))),
+                reference_size=ted_reference_size,
+                contamination=ted_contamination,
+                device=get_device(0),
+            )
+        else:
+            results = run_scaleup(
+                mdl,
+                config,
+                num_samples=n_s,
+                threshold=scaleup_threshold_converted,
+                scales=scaleup_scales_converted,
+                device=get_device(0),
+                test_loader=test_loader,
+            )
+    except Exception as ex:
+        typer.secho(
+            f"Error: failed to run '{m}' on model {p}.\nReason: {ex}",
+            err=True,
+        )
+        raise typer.Exit(code=EXIT_IO_ERROR)
 
-    results = scaleup_stub_results(
-        method=m,
-        num_samples=n_s,
-        threshold=scaleup_threshold_converted,
-        scales=scaleup_scales_converted,
-    )
     rep = rpt.build_report(
-        model_path=model,
+        model_path=str(p),
         defense=m,
         dataset=data,
         version=VERSION,
@@ -637,9 +717,14 @@ def detect(
         raise typer.Exit(code=EXIT_IO_ERROR)
 
     _write_json(rep, out, force)
-    print(rpt.render_summary(rep))
-
-
+    if m == "ted":
+        rule = f"TED score > {results['threshold']:.4g}"
+    else:
+        rule = f"SPC > {scaleup_threshold_converted}"
+    print(
+        f"[detect] {results['verdict']}: {results['num_flagged']}/{results['num_inputs']} "
+        f"inputs flagged ({rule})"
+    )
 
 
 @app.command()
@@ -716,7 +801,7 @@ def repair(
     ),
     lmr_target_class: int = typer.Option(
         None, "--lmr-target-class",
-        help="LMR: target class to repair. Omit to infer.",
+        help="LMR: target class to repair. Required for LMR.",
     ),
     lmr_prune_ratio: float = typer.Option(
         None, "--lmr-prune-ratio",
@@ -728,10 +813,8 @@ def repair(
     ),
 ):
 
-# Look through this and proably make better so we can scale it when we add more
-# have it read the method then go from there
-# check
-    if method.strip().lower() not in REPAIR_METHODS:
+
+    if method not in REPAIR_METHODS:
         typer.secho(
             f"Error: Unsupported repair method '{method}'. "
             f"Supported methods: {', '.join(sorted(REPAIR_METHODS))}",
@@ -739,54 +822,178 @@ def repair(
         )
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
-    model_path = Path(model)
-    if not model_path.exists() or not model_path.is_file():
-        typer.secho(
-            f"Error: model path not found or not a file: {model_path}",
-            err=True,
-        )
-        raise typer.Exit(code=EXIT_NO_INPUT)
-
-    try:
-        with model_path.open("rb"):
-            pass
-    except OSError as ex:
-        typer.secho(
-            f"Error: model file could not be opened: {model_path}\nReason: {ex}", err=True
-        )
-        raise typer.Exit(code=EXIT_IO_ERROR)
     
-    report_path = report if report is not None else out.with_suffix(".json")
-    method = method.strip().lower()
+    if method == "lmr":
 
-    if method == "clp" and (not math.isfinite(clp_threshold_mult) or clp_threshold_mult < 0):
-        typer.secho("Error: --clp-threshold-mult must be finite and nonnegative.", err=True)
-        raise typer.Exit(code=EXIT_USAGE_ERROR)
-
-    if str(report_path) == "-" and method != "clp":
-        typer.secho("Error: --report - is currently supported only for CLP.", err=True)
-        raise typer.Exit(code=EXIT_USAGE_ERROR)
-
-    # Prevent accidental overwrites BEFORE any model processing starts.
-    # '-' is a special stdout destination, not a filesystem path.
-    destinations = [out]
-    if str(report_path) != "-":
-        destinations.append(report_path)
-        if out.resolve() == report_path.resolve():
-            typer.secho("Error: checkpoint and report must have different paths.", err=True)
+    #validate inputs for LMR
+        if lmr_target_class is None:
+            typer.secho(
+                "Error: --lmr-target-class is required for LMR repair.",
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
+        if lmr_prune_ratio is None:
+            typer.secho(
+                "Error: --lmr-prune-ratio is required for LMR repair.",
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
+        if clean_samples <= 0:
+            typer.secho(
+                "Error: --clean-samples must be a positive integer.",
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
+        if not 0 <= lmr_prune_ratio < 1:
+            typer.secho("Error: --lmr-prune-ratio must be in [0, 1).", err=True)
             raise typer.Exit(code=EXIT_USAGE_ERROR)
 
-    for path in destinations:
-        if path.exists() and not force:
-            typer.secho(f"Error: output file already exists: {path}. Use --force to overwrite.", err=True)
+        prune_ratio = lmr_prune_ratio
+
+        seed_value = seed if seed is not None else 0
+#check paths
+        model_path = Path(model)
+
+        if not model_path.exists() or not model_path.is_file():
+            typer.secho(
+                f"Error: model path not found or not a file: {model_path}",
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_NO_INPUT)
+
+        report_path = report if report is not None else out.with_suffix(".json")
+
+        if out.exists() and not force:
+            typer.secho(
+                f"Error: output file already exists: {out}. Use --force to overwrite.",
+                err=True,
+            )
             raise typer.Exit(code=EXIT_CANT_CREATE)
 
-    if method == "lmr":
-        repair_lmr_stub(model=model, out=str(out), report=str(report_path), dataset=data)
+        if report_path != Path("-") and report_path.exists() and not force:
+            typer.secho(
+                f"Error: report file already exists: {report_path}. Use --force to overwrite.",
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_CANT_CREATE)
+#load model
+        try:
+            config = utils.get_preprocess_config(data)
+        except ValueError as ex:
+            typer.secho(f"Error: {ex}", err=True)
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
+        num_classes = config.get_num_classes()
+
+        if not 0 <= lmr_target_class < num_classes:
+            typer.secho(f"Error: --lmr-target-class must be in [0, {num_classes}), got {lmr_target_class}.", err=True)
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+        try:
+            mdl, _ = loader.detect_and_build(str(model_path), arch_hint="resnet18", num_classes=num_classes)
+
+        except Exception as ex:
+            typer.secho(
+                f"Error: failed to load model '{model_path}'.\nReason: {ex}",
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_IO_ERROR)
+#build clean dataset
+        try:
+            train_loader, _ = utils.dataloader_for(data, "train", 64)
+
+            dataset_size = len(train_loader.dataset)
+
+            sample_count = min(clean_samples, dataset_size)
+
+            generator = torch.Generator()
+            generator.manual_seed(seed_value)
+
+            indices = torch.randperm(dataset_size, generator=generator)[:sample_count].tolist()
+
+            clean_subset = torch.utils.data.Subset(train_loader.dataset, indices)
+
+            clean_loader = torch.utils.data.DataLoader(clean_subset, batch_size=(min(64, sample_count)), shuffle=True, num_workers=0)
+
+        except Exception as ex:
+            typer.secho(
+                f"Error: failed to build dataloader for dataset '{data}'.\nReason: {ex}",
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_IO_ERROR)
+#run lmr
+        try:
+            repaired_model, results = run_lmr(mdl, clean_loader, target_class=lmr_target_class, prune_ratio=prune_ratio, seed=seed_value)
+
+        except Exception as ex:
+            typer.secho(
+                f"Error: failed to run LMR repair on model '{model_path}'.\nReason: {ex}",
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_IO_ERROR)
+
+        results["parameters"]["clean_samples"] = sample_count
+#build report
+        report = rpt.build_repair_report(
+            model_path=str(model_path),
+            method=method,
+            dataset=data,
+            version=VERSION,
+            results=results,
+        )
+
+        try: 
+            rpt.validate_report_data(report)
+
+        except Exception as ex:
+            typer.secho(
+                f"Error: generated report failed schema validation.\nReason: {ex}",
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_IO_ERROR)
+#save repaired model and report
+        try: 
+            out.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(repaired_model.state_dict(), out)
+
+        except Exception as ex:
+            typer.secho(
+                f"Error: failed to save repaired model to '{out}'.\nReason: {ex}",
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_IO_ERROR)
+
+        _write_json(report, str(report_path), force)
+
+        typer.secho(f"\n[cli] LMR repair completed successfully. Repaired model saved to '{out}'. Report saved to '{report_path}'.", fg=typer.colors.GREEN)
+    
     elif method == "clp":
-        repair_clp(model_path=model, out=str(out), report=str(report_path), threshold_mult=clp_threshold_mult)
+        if not math.isfinite(clp_threshold_mult) or clp_threshold_mult < 0:
+            typer.secho("Error: --clp-threshold-mult must be finite and nonnegative.", err=True)
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
 
+        model_path = Path(model)
+        if not model_path.exists() or not model_path.is_file():
+            typer.secho(f"Error: model path not found or not a file: {model_path}", err=True)
+            raise typer.Exit(code=EXIT_NO_INPUT)
 
+        report_path = report if report is not None else out.with_suffix(".json")
+        destinations = [out]
+        if str(report_path) != "-":
+            destinations.append(report_path)
+            if out.resolve() == report_path.resolve():
+                typer.secho("Error: checkpoint and report must have different paths.", err=True)
+                raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+        for path in destinations:
+            if path.exists() and not force:
+                typer.secho(f"Error: output file already exists: {path}. Use --force to overwrite.", err=True)
+                raise typer.Exit(code=EXIT_CANT_CREATE)
+
+        try:
+            repair_clp(model_path=model, out=str(out), report=str(report_path), threshold_mult=clp_threshold_mult)
+        except Exception as ex:
+            typer.secho(f"Error: failed to run CLP repair on model '{model_path}'.\nReason: {ex}", err=True)
+            raise typer.Exit(code=EXIT_IO_ERROR)
 
 if __name__ == "__main__":
     app()
