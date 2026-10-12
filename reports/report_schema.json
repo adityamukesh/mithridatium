@@ -181,6 +181,7 @@
 						"required": [
 							"method",
 							"parameters",
+							"total_channels_pruned",
 							"status"
 						],
 						"properties": {
@@ -189,13 +190,29 @@
 								"const": "clp"
 							},
 							"parameters": {
-								"type": "object"
+								"type": "object",
+								"required": ["threshold_mult"],
+								"properties": {
+									"threshold_mult": {
+										"type": "number",
+										"minimum": 0
+									}
+								}
 							},
 							"total_channels_pruned": {
-								"type": "integer"
+								"type": "integer",
+								"minimum": 0
 							},
 							"layer_breakdown": {
-								"type": "array"
+								"type": "array",
+								"items": {
+									"type": "object",
+									"required": ["layer", "channels_pruned"],
+									"properties": {
+										"layer": {"type": "string"},
+										"channels_pruned": {"type": "integer", "minimum": 1}
+									}
+								}
 							},
 							"status": {
 								"type": "string"
