@@ -5,6 +5,7 @@ from importlib.metadata import version as package_version
 from pathlib import Path
 import typer
 import ast
+import math
 # from mithridatium.service import (
 #     DEFENSES,
 #     DetectionExecutionError,
@@ -687,7 +688,7 @@ def repair(
     ),
     method: str = typer.Option(
         "lmr", "--method", "-M",
-        help="The repair method to run. E.g. 'lmr'.",
+        help="The repair method to run: lmr (stub) or clp.",
     ),
     data: str = typer.Option(
         "cifar10", "--data", "-d",
@@ -755,17 +756,35 @@ def repair(
         )
         raise typer.Exit(code=EXIT_IO_ERROR)
     
-    report_path = report if report else out.with_suffix(".json")
-
+    report_path = report if report is not None else out.with_suffix(".json")
     method = method.strip().lower()
+
+    if method == "clp" and (not math.isfinite(clp_threshold_mult) or clp_threshold_mult < 0):
+        typer.secho("Error: --clp-threshold-mult must be finite and nonnegative.", err=True)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    if str(report_path) == "-" and method != "clp":
+        typer.secho("Error: --report - is currently supported only for CLP.", err=True)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    # Prevent accidental overwrites BEFORE any model processing starts.
+    # '-' is a special stdout destination, not a filesystem path.
+    destinations = [out]
+    if str(report_path) != "-":
+        destinations.append(report_path)
+        if out.resolve() == report_path.resolve():
+            typer.secho("Error: checkpoint and report must have different paths.", err=True)
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    for path in destinations:
+        if path.exists() and not force:
+            typer.secho(f"Error: output file already exists: {path}. Use --force to overwrite.", err=True)
+            raise typer.Exit(code=EXIT_CANT_CREATE)
+
     if method == "lmr":
         repair_lmr_stub(model=model, out=str(out), report=str(report_path), dataset=data)
     elif method == "clp":
         repair_clp(model_path=model, out=str(out), report=str(report_path), threshold_mult=clp_threshold_mult)
-    else:
-        typer.secho(f"Error: unsupported --method '{method}'. "
-                    f"Supported: {', '.join(sorted(REPAIR_METHODS))}", err=True)
-        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
 
 
