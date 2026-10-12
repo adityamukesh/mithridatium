@@ -635,40 +635,9 @@ def detect(
         typer.secho(f"Error: --scaleup-scales must include only numbers greater than 0, got {scaleup_scales}.", err=True)
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
-    _check_out_writable(out, force)
-
-    print(f"[cli] loading model from {p}…")
-
-    try:
-        cfg = utils.get_preprocess_config(data)
-        mdl, _ = loader.detect_and_build(str(p), num_classes=cfg.get_num_classes())
-        test_loader, config = utils.dataloader_for(data, "test", 128)
-    except Exception as ex:
-        typer.secho(
-            f"Error: failed to load model '{p}'.\nReason: {ex}",
-            err=True,
-        )
-        raise typer.Exit(code=EXIT_IO_ERROR)
-
-    print(f"[cli] running method={m}…")
-
-    try:
-        results = run_scaleup(
-            mdl,
-            config,
-            num_samples=n_s,
-            threshold=scaleup_threshold_converted,
-            scales=scaleup_scales_converted,
-            device=get_device(0),
-            test_loader=test_loader,
-        )
-    except Exception as ex:
-        typer.secho(
-            f"Error: failed to run '{m}' on model {p}.\nReason: {ex}",
-            err=True,
-        )
-        raise typer.Exit(code=EXIT_IO_ERROR)
-
+    """
+    Validate TED options.
+    """
     if m == "ted":
         if not 0 < ted_contamination <= 0.5:
             typer.secho(f"Error: --ted-contamination must be within 0 < alpha <= 0.5, got {ted_contamination}.", err=True)
@@ -684,33 +653,60 @@ def detect(
                 err=True,
             )
             raise typer.Exit(code=EXIT_USAGE_ERROR)
-        from torch.utils.data import Subset
 
-        try:
-            test_loader, cfg = utils.dataloader_for(data, "test")
-            train_loader, _ = utils.dataloader_for(data, "train")
-        except ValueError as ex:
-            typer.secho(f"Error: {ex}", err=True)
-            raise typer.Exit(code=EXIT_USAGE_ERROR)
+    _check_out_writable(out, force)
 
+    try:
+        cfg = utils.get_preprocess_config(data)
+    except ValueError as ex:
+        typer.secho(f"Error: {ex}", err=True)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+    print(f"[cli] loading model from {p}…")
+
+    try:
         mdl, _ = loader.detect_and_build(str(p), num_classes=cfg.get_num_classes())
-        test_ds, train_ds = test_loader.dataset, train_loader.dataset
-        results = ted(
-            mdl,
-            # 2x headroom for the misclassified images ted() drops from the reference set
-            reference_data=Subset(train_ds, range(min(len(train_ds), 2 * ted_reference_size))),
-            suspect_data=Subset(test_ds, range(min(len(test_ds), ted_num_samples))),
-            reference_size=ted_reference_size,
-            contamination=ted_contamination,
-            device=get_device(0),
+        test_loader, config = utils.dataloader_for(data, "test", 128)
+        if m == "ted":
+            train_loader, _ = utils.dataloader_for(data, "train", 128)
+    except Exception as ex:
+        typer.secho(
+            f"Error: failed to load model '{p}'.\nReason: {ex}",
+            err=True,
         )
-    else:
-        results = scaleup_stub_results(
-            method=m,
-            num_samples=n_s,
-            threshold=scaleup_threshold_converted,
-            scales=scaleup_scales_converted,
+        raise typer.Exit(code=EXIT_IO_ERROR)
+
+    print(f"[cli] running method={m}…")
+
+    try:
+        if m == "ted":
+            test_ds, train_ds = test_loader.dataset, train_loader.dataset
+            results = ted(
+                mdl,
+                # 2x headroom for the misclassified images ted() drops from the reference set
+                reference_data=torch.utils.data.Subset(train_ds, range(min(len(train_ds), 2 * ted_reference_size))),
+                suspect_data=torch.utils.data.Subset(test_ds, range(min(len(test_ds), ted_num_samples))),
+                reference_size=ted_reference_size,
+                contamination=ted_contamination,
+                device=get_device(0),
+            )
+        else:
+            results = run_scaleup(
+                mdl,
+                config,
+                num_samples=n_s,
+                threshold=scaleup_threshold_converted,
+                scales=scaleup_scales_converted,
+                device=get_device(0),
+                test_loader=test_loader,
+            )
+    except Exception as ex:
+        typer.secho(
+            f"Error: failed to run '{m}' on model {p}.\nReason: {ex}",
+            err=True,
         )
+        raise typer.Exit(code=EXIT_IO_ERROR)
+
     rep = rpt.build_report(
         model_path=str(p),
         defense=m,
@@ -729,9 +725,13 @@ def detect(
         raise typer.Exit(code=EXIT_IO_ERROR)
 
     _write_json(rep, out, force)
+    if m == "ted":
+        rule = f"TED score > {results['threshold']:.4g}"
+    else:
+        rule = f"SPC > {scaleup_threshold_converted}"
     print(
         f"[detect] {results['verdict']}: {results['num_flagged']}/{results['num_inputs']} "
-        f"inputs flagged (SPC > {scaleup_threshold_converted})"
+        f"inputs flagged ({rule})"
     )
 
 
