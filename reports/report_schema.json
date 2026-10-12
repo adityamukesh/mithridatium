@@ -5,9 +5,22 @@
 		"mithridatium_version",
 		"timestamp_utc",
 		"model_path",
-		"defense",
 		"dataset",
 		"results"
+	],
+	"anyOf": [
+		{
+			"required": ["defense"],
+			"not": {
+				"required": ["method"]
+			}
+		}, 
+		{
+			"required": ["method"], 
+			"not": {
+				"required": ["defense"]
+			}
+		}
 	],
 	"properties": {
 		"mithridatium_version": {
@@ -20,6 +33,9 @@
 			"type": "string"
 		},
 		"defense": {
+			"type": "string"
+		},
+		"method": {
 			"type": "string"
 		},
 		"dataset": {
@@ -134,35 +150,72 @@
 		},
 		{
 			"if": {
-				"properties": {
-					"defense": {
-						"const": "lmr"
-					}
-				},
 				"required": [
-					"defense"
+					"method"
 				]
 			},
 			"then": {
 				"properties": {
+					"method": {
+						"type": "string",
+						"minLength": 1
+					},
 					"results": {
 						"type": "object",
 						"required": [
-							"status"
+							"verdict",
+							"parameters"
 						],
 						"properties": {
-							"status": {
+							"verdict": {
 								"type": "string"
+							},
+							"parameters": {
+								"type": "object"
 							}
 						},
 						"additionalProperties": true
 					}
 				},
 				"required": [
+					"method",
 					"results"
 				]
 			}
+		},
+		{
+			"if": {
+				"properties": {
+					"defense": { "const": "scaleup" }
+				},
+				"required": ["defense"]
+			},
+			"then": {
+				"properties": {
+					"results": {
+						"required": [
+							"mode",
+							"method",
+							"verdict",
+							"num_inputs",
+							"num_flagged",
+							"threshold",
+							"parameters",
+							"per_sample"
+						],
+						"properties": {
+							"mode": { "const": "input-level" },
+							"method": { "const": "scaleup" },
+							"per_sample": {
+								"type": "array",
+								"items": {
+									"required": ["index", "predicted_label", "score", "flagged"]
+								}
+							}
+						}
+					}
+				}
+			}
 		}
-	],
-	"additionalProperties": true
+	]
 }
