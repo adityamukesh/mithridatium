@@ -46,7 +46,7 @@ def _prune_channels(bn: nn.BatchNorm2d, score: torch.Tensor, threshold_mult: flo
     return idx.tolist()
 
 
-def repair_clp(model_path: str, out: str, report: str, threshold_mult: float = 3.0) -> None:
+def repair_clp(model_path: str, out: str, report: str, threshold_mult: float = 3.0, *, version: str) -> None:
     """Prune high-scoring ResNet channels and write a checkpoint and report.
 
     report="-" writes JSON to stdout instead of a file. This is data-free,
@@ -99,7 +99,7 @@ def repair_clp(model_path: str, out: str, report: str, threshold_mult: float = 3
             last_conv = None
 
     report_data = {
-        "mithridatium_version": "0.1.0",
+        "mithridatium_version": version,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
         "defense": "clp",

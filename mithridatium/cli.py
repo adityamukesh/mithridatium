@@ -990,7 +990,7 @@ def repair(
                 raise typer.Exit(code=EXIT_CANT_CREATE)
 
         try:
-            repair_clp(model_path=model, out=str(out), report=str(report_path), threshold_mult=clp_threshold_mult)
+            repair_clp(model_path=model, out=str(out), report=str(report_path), threshold_mult=clp_threshold_mult, version=VERSION)
         except Exception as ex:
             typer.secho(f"Error: failed to run CLP repair on model '{model_path}'.\nReason: {ex}", err=True)
             raise typer.Exit(code=EXIT_IO_ERROR)

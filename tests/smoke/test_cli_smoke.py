@@ -272,6 +272,7 @@ def test_cli_repair_clp_passes_arguments(tmp_path, monkeypatch):
         "out": str(out),
         "report": str(report),
         "threshold_mult": 1.5,
+        "version": VERSION,
     }]
 
 

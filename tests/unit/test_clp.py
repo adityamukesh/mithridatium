@@ -67,7 +67,7 @@ def test_repair_clp_creates_checkpoint_and_valid_report(tmp_path, monkeypatch):
     )
     out = tmp_path / "subdir" / "repaired.pth"
     report_file = tmp_path / "reports" / "clp.json"
-    repair_clp("dummy.pth", str(out), str(report_file), threshold_mult=1.0)
+    repair_clp("dummy.pth", str(out), str(report_file), threshold_mult=1.0, version="test")
 
     assert out.exists()
     saved = torch.load(out, map_location="cpu", weights_only=True)
@@ -93,7 +93,7 @@ def test_repair_rejects_invalid_threshold_before_loading(tmp_path, monkeypatch, 
         raise AssertionError("loader should not run for invalid threshold")
     monkeypatch.setattr("mithridatium.repair.clp.loader.detect_and_build", should_not_load)
     with pytest.raises(ValueError, match="nonnegative"):
-        repair_clp("dummy.pth", str(tmp_path / "out.pth"), str(tmp_path / "r.json"), invalid)
+        repair_clp("dummy.pth", str(tmp_path / "out.pth"), str(tmp_path / "r.json"), invalid, version="test")
 
 
 def test_clp_schema_requires_prune_count():
