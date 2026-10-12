@@ -216,6 +216,47 @@
 					}
 				}
 			}
+		},
+    		{
+			"if": {
+				"properties": {
+					"defense": { "const": "clp" }
+				},
+				"required": ["defense"]
+			},
+			"then": {
+				"properties": {
+					"results": {
+						"type": "object",
+						"required": ["method", "parameters", "total_channels_pruned", "status"],
+						"properties": {
+							"method": { "type": "string", "const": "clp" },
+							"parameters": {
+								"type": "object",
+								"required": ["threshold_mult"],
+								"properties": {
+									"threshold_mult": { "type": "number", "minimum": 0 }
+								}
+							},
+							"total_channels_pruned": { "type": "integer", "minimum": 0 },
+							"layer_breakdown": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"required": ["layer", "channels_pruned"],
+									"properties": {
+										"layer": { "type": "string" },
+										"channels_pruned": { "type": "integer", "minimum": 1 }
+									}
+								}
+							},
+							"status": { "type": "string" }
+						},
+						"additionalProperties": true
+					}
+				},
+				"required": ["results"]
+			}
 		}
 	]
 }

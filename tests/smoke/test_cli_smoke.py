@@ -248,6 +248,66 @@ def test_cli_audit_rejects_unknown_defense_before_running_model(tmp_path):
     assert "unsupported" in result.stdout.lower() or "unsupported" in result.stderr.lower()
     assert "spectral" in result.stdout.lower() or "spectral" in result.stderr.lower()
 
+
+def test_cli_repair_clp_passes_arguments(tmp_path, monkeypatch):
+    """CLP should be selected and receive the requested threshold and paths."""
+    model = tmp_path / "model.pth"
+    model.write_bytes(b"placeholder")
+    out = tmp_path / "repaired.pth"
+    report = tmp_path / "clp.json"
+    calls = []
+
+    monkeypatch.setattr(
+        "mithridatium.cli.repair_clp", lambda **kwargs: calls.append(kwargs)
+    )
+    result = runner.invoke(app, [
+        "repair", "--method", "clp", "--model", str(model),
+        "--clp-threshold-mult", "1.5", "--out", str(out),
+        "--report", str(report),
+    ])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert calls == [{
+        "model_path": str(model),
+        "out": str(out),
+        "report": str(report),
+        "threshold_mult": 1.5,
+        "version": VERSION,
+    }]
+
+
+def test_cli_repair_clp_overwrite_requires_force(tmp_path, monkeypatch):
+    """An existing output is protected unless --force is provided."""
+    model = tmp_path / "model.pth"
+    model.write_bytes(b"placeholder")
+    out = tmp_path / "repaired.pth"
+    out.write_bytes(b"original")
+    report = tmp_path / "clp.json"
+    report.write_text("original", encoding="utf-8")
+    calls = []
+
+    def fake_repair(**kwargs):
+        calls.append(kwargs)
+        out.write_bytes(b"new")
+        report.write_text("new", encoding="utf-8")
+
+    monkeypatch.setattr("mithridatium.cli.repair_clp", fake_repair)
+    args = [
+        "repair", "--method", "clp", "--model", str(model),
+        "--out", str(out), "--report", str(report),
+    ]
+
+    refused = runner.invoke(app, args)
+    assert refused.exit_code == EXIT_CANT_CREATE
+    assert calls == []
+    assert out.read_bytes() == b"original"
+    assert report.read_text(encoding="utf-8") == "original"
+
+    allowed = runner.invoke(app, [*args, "--force"])
+    assert allowed.exit_code == 0, allowed.stdout + allowed.stderr
+    assert len(calls) == 1
+    assert out.read_bytes() == b"new"
+    assert report.read_text(encoding="utf-8") == "new"
 def test_cli_detect_ted_writes_schema_valid_report(tmp_path, monkeypatch):
     import torch
     from torch.utils.data import DataLoader, TensorDataset

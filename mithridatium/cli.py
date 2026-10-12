@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 import typer
 import ast
+import math
 # from mithridatium.service import (
 #     DEFENSES,
 #     DetectionExecutionError,
@@ -24,6 +25,7 @@ from mithridatium.defenses.mmbd import get_device
 from mithridatium.loader import validate_model
 from mithridatium.defenses.aeva import run_aeva
 from mithridatium.defense_config import apply_freeeagle_cli_options
+from mithridatium.repair.clp import repair_clp
 from mithridatium.detect.scaleup import run_scaleup
 from mithridatium.detect.ted import ted
 from mithridatium.repair import run_lmr
@@ -42,7 +44,7 @@ EXIT_IO_ERROR = 74        # input exists but can't be opened/read
 app = typer.Typer(help="Mithridatium CLI - verify pretrained model integrity")
 
 DEFENSES = {"freeeagle", "aeva", "mmbd", "strip"}
-REPAIR_METHODS = {"lmr"}
+REPAIR_METHODS = {"lmr", "clp"}
 
 DETECT_METHODS = {"scaleup", "ted"}
 
@@ -771,7 +773,7 @@ def repair(
     ),
     method: str = typer.Option(
         "lmr", "--method", "-M",
-        help="The repair method to run. E.g. 'lmr'.",
+        help="The repair method to run: 'lmr' or 'clp'.",
     ),
     data: str = typer.Option(
         "cifar10", "--data", "-d",
@@ -804,6 +806,10 @@ def repair(
     lmr_prune_ratio: float = typer.Option(
         None, "--lmr-prune-ratio",
         help="LMR: fraction of most-moved columns to prune.",
+    ),
+    clp_threshold_mult: float = typer.Option(
+        3.0, "--clp-threshold-mult",
+        help="CLP threshold multiplier u (prune channels with score > mean + u*std). Default 3.0.",
     ),
 ):
 
@@ -959,6 +965,35 @@ def repair(
         _write_json(report, str(report_path), force)
 
         typer.secho(f"\n[cli] LMR repair completed successfully. Repaired model saved to '{out}'. Report saved to '{report_path}'.", fg=typer.colors.GREEN)
+    
+    elif method == "clp":
+        if not math.isfinite(clp_threshold_mult) or clp_threshold_mult < 0:
+            typer.secho("Error: --clp-threshold-mult must be finite and nonnegative.", err=True)
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+        model_path = Path(model)
+        if not model_path.exists() or not model_path.is_file():
+            typer.secho(f"Error: model path not found or not a file: {model_path}", err=True)
+            raise typer.Exit(code=EXIT_NO_INPUT)
+
+        report_path = report if report is not None else out.with_suffix(".json")
+        destinations = [out]
+        if str(report_path) != "-":
+            destinations.append(report_path)
+            if out.resolve() == report_path.resolve():
+                typer.secho("Error: checkpoint and report must have different paths.", err=True)
+                raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+        for path in destinations:
+            if path.exists() and not force:
+                typer.secho(f"Error: output file already exists: {path}. Use --force to overwrite.", err=True)
+                raise typer.Exit(code=EXIT_CANT_CREATE)
+
+        try:
+            repair_clp(model_path=model, out=str(out), report=str(report_path), threshold_mult=clp_threshold_mult, version=VERSION)
+        except Exception as ex:
+            typer.secho(f"Error: failed to run CLP repair on model '{model_path}'.\nReason: {ex}", err=True)
+            raise typer.Exit(code=EXIT_IO_ERROR)
 
 if __name__ == "__main__":
     app()
