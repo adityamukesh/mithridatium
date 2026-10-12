@@ -25,6 +25,7 @@ from mithridatium.loader import validate_model
 from mithridatium.defenses.aeva import run_aeva
 from mithridatium.defense_config import apply_freeeagle_cli_options
 from mithridatium.detect.scaleup import run_scaleup
+from mithridatium.detect.ted import ted
 from mithridatium.repair import run_lmr
 
 try:
@@ -641,17 +642,6 @@ def detect(
     if m == "ted":
         if not 0 < ted_contamination <= 0.5:
             typer.secho(f"Error: --ted-contamination must be within 0 < alpha <= 0.5, got {ted_contamination}.", err=True)
-            raise typer.Exit(code=EXIT_USAGE_ERROR)
-
-        # TED's dependencies are optional, so import it only when it is used.
-        try:
-            from mithridatium.detect.ted import ted
-        except ImportError as ex:
-            typer.secho(
-                f"Error: --method ted needs extra dependencies (missing {ex.name}). "
-                "Install with: pip install 'mithridatium[ted]'",
-                err=True,
-            )
             raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     _check_out_writable(out, force)

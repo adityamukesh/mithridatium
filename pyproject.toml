@@ -15,6 +15,9 @@ dependencies = [
     "numpy",
     "scipy",
     "jsonschema",
+    "pyod>=1.1",
+    "scikit-learn",
+    "torchmetrics",
 ]
 
 [project.optional-dependencies]
@@ -33,12 +36,6 @@ ui = [
     "plotly>=5",
 ]
 demo = [
-    "matplotlib>=3.8",
-]
-ted = [
-    "pyod>=1.1",
-    "scikit-learn",
-    "torchmetrics",
     "matplotlib>=3.8",
 ]
 dev = [
@@ -61,9 +58,6 @@ all = [
     "fastmcp>=3.4,<4",
     "langchain",
     "langchain-mcp-adapters==0.3.2",
-    "pyod>=1.1",
-    "scikit-learn",
-    "torchmetrics",
 ]
 
 [tool.setuptools.packages.find]

@@ -247,3 +247,45 @@ def test_cli_audit_rejects_unknown_defense_before_running_model(tmp_path):
     assert result.exit_code != 0
     assert "unsupported" in result.stdout.lower() or "unsupported" in result.stderr.lower()
     assert "spectral" in result.stdout.lower() or "spectral" in result.stderr.lower()
+
+def test_cli_detect_ted_writes_schema_valid_report(tmp_path, monkeypatch):
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+
+    from mithridatium import cli
+    from mithridatium.utils import get_preprocess_config
+
+    fake_model = tmp_path / "fake.pth"
+    fake_model.write_bytes(b"not a real checkpoint")
+    out_path = tmp_path / "detect_ted.json"
+
+    toy = torch.nn.Sequential(
+        torch.nn.Conv2d(3, 4, 3, padding=1), torch.nn.ReLU(),
+        torch.nn.Flatten(), torch.nn.Linear(4 * 8 * 8, 3),
+    ).eval()
+    x = torch.randn(150, 3, 8, 8, generator=torch.Generator().manual_seed(0))
+
+    with torch.no_grad():
+        y = toy(x).argmax(1)
+        # Upstream's TED code assumes every predicted class has at least two
+        # reference samples, so drop classes the untrained toy predicts only once.
+        keep = torch.bincount(y, minlength=3)[y] >= 2
+        x, y = x[keep], y[keep]
+
+    data = TensorDataset(x, y)
+    cfg = get_preprocess_config("cifar10")
+
+    monkeypatch.setattr(cli.loader, "detect_and_build", lambda *a, **k: (toy, None))
+    monkeypatch.setattr(cli.utils, "dataloader_for", lambda *a, **k: (DataLoader(data, batch_size=16), cfg))
+
+    result = runner.invoke(app, [
+        "detect", "--model", str(fake_model), "--method", "ted", "--data", "cifar10",
+        "--ted-num-samples", "10", "--ted-reference-size", "150",
+        "--ted-contamination", "0.1", "--out", str(out_path),
+    ])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    rpt.validate_report_data(payload)
+    assert payload["results"]["method"] == "ted"
+    assert payload["results"]["num_inputs"] == 10
