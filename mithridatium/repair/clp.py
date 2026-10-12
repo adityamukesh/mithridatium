@@ -13,9 +13,12 @@ including vectorization improvements and custom CLI dispatching.
 import torch
 import torch.nn as nn 
 import json
+import math
+import sys
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
-from mithridatium import loader
+from mithridatium import loader, report as rpt
 
 
 # Gives each output channel a score to know which is backdoor 
@@ -44,8 +47,22 @@ def _prune_channels(bn: nn.BatchNorm2d, score: torch.Tensor, threshold_mult: flo
 
 
 def repair_clp(model_path: str, out: str, report: str, threshold_mult: float = 3.0) -> None:
+    """Prune high-scoring ResNet channels and write a checkpoint and report.
 
-    model, _ = loader.detect_and_build(str(model_path), arch_hint="resnet18", num_classes=10)
+    report="-" writes JSON to stdout instead of a file. This is data-free,
+    but the loaded checkpoint must be compatible with the repository's
+    ResNet-18 / 10-class loader.
+    """
+    if not math.isfinite(threshold_mult) or threshold_mult < 0:
+        raise ValueError("CLP threshold multiplier must be a finite nonnegative number")
+
+    # Loader currently prints progress to stdout. Keep stdout valid JSON when
+    # callers request --report - by sending those messages to stderr instead.
+    if str(report) == "-":
+        with redirect_stdout(sys.stderr):
+            model, _ = loader.detect_and_build(str(model_path), arch_hint="resnet18", num_classes=10)
+    else:
+        model, _ = loader.detect_and_build(str(model_path), arch_hint="resnet18", num_classes=10)
     
     model.eval()
 
@@ -81,10 +98,6 @@ def repair_clp(model_path: str, out: str, report: str, threshold_mult: float = 3
                     
             last_conv = None
 
-    # Saves the repaired checkpoint to the output path and checks the dirctotry is real first
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), out)
-
     report_data = {
         "mithridatium_version": "0.1.0",
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -100,7 +113,16 @@ def repair_clp(model_path: str, out: str, report: str, threshold_mult: float = 3
         },
     }
 
-    # Write the report
-    Path(report).parent.mkdir(parents=True, exist_ok=True)
-    with open(report, "w") as f:
-        json.dump(report_data, f, indent=2)
+    # Verify the report before writing either output.
+    rpt.validate_report_data(report_data)
+
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), out)
+
+    if str(report) == "-":
+        json.dump(report_data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    else:
+        Path(report).parent.mkdir(parents=True, exist_ok=True)
+        with open(report, "w", encoding="utf-8") as f:
+            json.dump(report_data, f, indent=2)
