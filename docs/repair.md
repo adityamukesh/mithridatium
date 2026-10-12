@@ -6,12 +6,31 @@
 |---|---|
 | `mithridatium audit` | **Detect** whether a model is backdoored. Runs a defense (e.g. FreeEagle, STRIP) and writes a verdict report. |
 | `mithridatium detect` | **Input-level** poisoning detection (e.g. SCALE-UP). See [Detect](detect.md). |
-| `mithridatium repair` | **Repair** a backdoored model. Copies the checkpoint to a new path and writes a report. |
+| `mithridatium repair` | **Repair** a backdoored model. Runs a repair method (LMR) and writes a modified checkpoint plus a report. |
 
 ## When to use repair vs audit
 
 - Run `audit` first to find out **if** your model is compromised.
 - Run `repair` after to **fix** a model that audit flagged as backdoored.
+
+## Supported repair methods
+
+Currently supported:
+- 'lmr' - Logit-Margin Repulsion based repair
+
+The repair command is designed so additional repair methods can be added in the future through the `--method` option.
+
+## LMR Requirements
+
+LMR is a white-box repair method, meaning Mithridatium must have access to the model parameters.
+
+LMR also requires:
+
+- a small set of clean samples
+- a target class specified with `--lmr-target-class`
+- a pruning ratio specified with `--lmr-prune-ratio`
+
+The clean samples are used during the repair and fine-tuning process.
 
 ## Example command
 
@@ -20,6 +39,10 @@ mithridatium repair \
   --model models/resnet18_poison.pth \
   --method lmr \
   --data cifar10 \
+  --clean-samples 500 \
+  --seed 42 \
+  --lmr-target-class 0 \
+  --lmr-prune-ratio 0.10 \
   --out models/resnet18_repaired.pth \
   --report reports/repair_report.json
 ```
@@ -36,9 +59,23 @@ mithridatium repair \
 | `--out` / `-o` | Path for the repaired output checkpoint (`.pth` / `.pt`). |
 | `--report` / `-r` | Path for the JSON report, or `-` for stdout. |
 | `--force` / `-f` | Overwrite the checkpoint or report if it already exists. |
-| `--lmr-target-class` | LMR: target class to repair (omit to infer). |
-| `--lmr-prune-ratio` | LMR: fraction of most-moved columns to prune. |
+| `--lmr-target-class` | LMR: target class to repair (required; automatic inference is not implemented). |
+| `--lmr-prune-ratio` | LMR: fraction of most-moved columns to prune (required). |
 
-Repair currently runs a stub that copies the checkpoint and writes a report; it does not remove a backdoor. `--clean-samples`, `--seed`, `--lmr-target-class`, and `--lmr-prune-ratio` are accepted for the future repair implementation but do not affect the copied checkpoint yet.
+## Caveats
+
+- This is a reduced version of LMR: 20 optimization steps plus 10 fine-tune steps, versus the paper's ~50 epochs.
+
+- The target class has to come from the user, for example from a prior audit. Upstream's automatic localization isn't implemented.
+
+- The pruning heuristic is simplified.
+
+- The output is a research signal; it doesn't certify the model as clean.
+
+## Future Work
+
+- Make this the actual LMR implementation from the repo
+
+- Add --lmr-repair-steps (default 20) and --lmr-fine-tune-steps (default 10) options to repair, following the pattern of --lmr-prune-ratio
 
 More copy-paste examples: [Sample commands](testing/sample-commands.md).
