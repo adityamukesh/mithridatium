@@ -2,6 +2,7 @@
 """
 Utility functions for data loading, preprocessing, and model configuration.
 """
+import os
 from pathlib import Path
 import torch
 from torchvision import datasets, transforms
@@ -321,6 +322,11 @@ def _build_transform_from_config(config: PreprocessConfig, *, train: bool = Fals
 
     return transforms.Compose(transform_list)
 
+def _num_workers() -> int:
+    # The MCP server sets this to 0: forking loader workers from its
+    # multithreaded process can deadlock.
+    return int(os.environ.get("MITHRIDATIUM_NUM_WORKERS", "2"))
+
 def dataloader_for(dataset: str, split: str, batch_size: int = 256) -> Tuple[torch.utils.data.DataLoader, PreprocessConfig]:
     """
     Create a dataloader for the specified dataset using canonical transforms.
@@ -425,7 +431,7 @@ def dataloader_for(dataset: str, split: str, batch_size: int = 256) -> Tuple[tor
         ds,
         batch_size=batch_size,
         shuffle=(split_lower == "train"),
-        num_workers=2,
+        num_workers=_num_workers(),
         pin_memory=True,
     )
 
@@ -530,7 +536,7 @@ def dataloader_for_config(
         ds,
         batch_size=batch_size,
         shuffle=(split_lower == "train"),
-        num_workers=2,
+        num_workers=_num_workers(),
         pin_memory=True,
     )
 

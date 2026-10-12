@@ -68,14 +68,27 @@ The agent connects to the local server, asks the model to call the requested def
 python -m mithridatium.mcp.audit_agent
 ```
 
-That command audits `models/resnet18_poison.pth`. With no defense named, the system prompt tells the model to run MMBD only. To audit another checkpoint, call `audit_agent()` from `mithridatium.mcp.audit_agent` with that path.
+That command audits `models/resnet18_poison.pth`. With no defense named, the system prompt tells the model to run MMBD only. To ask for something else, pass a prompt:
+
+```bash
+python -m mithridatium.mcp.audit_agent "Run STRIP and MMBD on models/resnet18_clean.pth"
+```
+
+The detect and repair agents work the same way:
+
+```bash
+python -m mithridatium.mcp.detect_agent "Run TED on models/resnet18_poison.pth"
+python -m mithridatium.mcp.repair_agent "Run LMR on models/resnet18_poison.pth with target class 0 and prune ratio 0.05"
+```
+
+With no prompt, the detect agent runs SCALE-UP and the repair agent runs CLP on `models/resnet18_poison.pth`. Each agent only receives its own tools. From Python, call `audit_agent()`, `detect_agent()` or `repair_agent()` with the prompt string.
 
 The printed reply is a short verdict summary. The full report is the JSON file under `reports/`.
 
 ## Contributor Notes
 
 - Register new tools on the shared `mcp` object in `mithridatium/mcp/__init__.py`, and import the new module from `main()` before `mcp.run`. Importing a tool module at the top of `__init__.py` cycles, because the tool module imports `mcp` from the package.
-- Keep `@mcp.tool(run_in_thread=False)`. The audit builds a PyTorch `DataLoader` with worker processes. Starting those workers from a FastMCP background thread deadlocks.
+- Keep `@mcp.tool(run_in_thread=False)`. The audit builds a PyTorch `DataLoader` with worker processes. Starting those workers from a FastMCP background thread deadlocks. Forking them from the server process can also deadlock, so `main()` sets `MITHRIDATIUM_NUM_WORKERS=0` and the loaders in `utils.py` run in-process.
 - Stay on FastMCP 3.x. `langchain-mcp-adapters` 0.3.2 requires `mcp` 1.x, and FastMCP 4 requires `mcp` 2.x.
 
 
