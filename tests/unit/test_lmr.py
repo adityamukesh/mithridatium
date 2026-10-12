@@ -56,5 +56,5 @@ def test_lmr_runs():
 
     assert repaired_model is model
     assert results["method"] == "lmr"
-    assert results["verdict"] == "repaired"
+    assert results["verdict"] == "repair_applied"
     assert results["pruning"]["columns_pruned"] > 0
