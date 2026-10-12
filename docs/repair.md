@@ -6,7 +6,7 @@
 |---|---|
 | `mithridatium audit` | **Detect** whether a model is backdoored. Runs a defense (e.g. FreeEagle, STRIP) and writes a verdict report. |
 | `mithridatium detect` | **Input-level** poisoning detection (e.g. SCALE-UP). See [Detect](detect.md). |
-| `mithridatium repair` | **Repair** a backdoored model. Runs a repair method (LMR) and writes a modified checkpoint plus a report. |
+| `mithridatium repair` | **Repair** a backdoored model. Runs a repair method (CLP or LMR) and writes a modified checkpoint plus a report. |
 
 ## When to use repair vs audit
 
@@ -109,8 +109,7 @@ are protected; use `--force` if overwriting is intentional. You can omit
 - **A successful CLP run is a research signal, not certification that the model
   is clean or that a backdoor was removed.** Validate clean accuracy and attack
   success rate separately if labeled evaluation data are available.
-- CLP does not change the `audit` or `detect` commands. The existing `lmr`
-  method remains a stub.
+- CLP does not change the `audit` or `detect` commands.
 
 ### Quick tests (no full ResNet training)
 

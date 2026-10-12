@@ -773,7 +773,7 @@ def repair(
     ),
     method: str = typer.Option(
         "lmr", "--method", "-M",
-        help="The repair method to run: lmr (stub) or clp.",
+        help="The repair method to run: 'lmr' or 'clp'.",
     ),
     data: str = typer.Option(
         "cifar10", "--data", "-d",
