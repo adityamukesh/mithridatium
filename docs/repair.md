@@ -39,4 +39,6 @@ mithridatium repair \
 | `--lmr-target-class` | LMR: target class to repair (omit to infer). |
 | `--lmr-prune-ratio` | LMR: fraction of most-moved columns to prune. |
 
+Repair currently runs a stub that copies the checkpoint and writes a report; it does not remove a backdoor. `--clean-samples`, `--seed`, `--lmr-target-class`, and `--lmr-prune-ratio` are accepted for the future repair implementation but do not affect the copied checkpoint yet.
+
 More copy-paste examples: [Sample commands](testing/sample-commands.md).
