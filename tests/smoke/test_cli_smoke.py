@@ -85,6 +85,17 @@ def test_cli_repair_rejects_unknown_method():
     assert result.exit_code != 0
     assert "unsupported repair method" in result.stderr.lower()
 
+def test_cli_repair_requires_target_class():
+    result = runner.invoke(app, ["repair","--method","lmr"])
+
+    assert result.exit_code != 0
+    assert "lmr-target-class" in result.stderr.lower()
+
+def test_cli_repair_requires_prune_ratio():
+    result = runner.invoke(app,["repair","--method","lmr","--lmr-target-class","0"])
+
+    assert result.exit_code != 0
+    assert "lmr-prune-ratio" in result.stderr.lower()
 
 def test_cli_detect_help_loads():
     result = runner.invoke(app, ["detect", "--help"])
