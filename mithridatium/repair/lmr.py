@@ -174,7 +174,7 @@ def run_lmr(model, clean_loader, target_class, prune_ratio=0.10, seed=0, repair_
 
     torch.manual_seed(seed)
 
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
 
     classifier_name, classifier = get_classifier(model)

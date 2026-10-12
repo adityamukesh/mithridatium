@@ -80,3 +80,9 @@ def test_lmr_repair_end_to_end(tmp_path, monkeypatch):
     f"\nException: {result.exception!r}")
     assert out_path.exists()
     assert report_path.exists()
+    import json
+    from mithridatium import report as rpt
+    payload = json.loads(report_path.read_text())
+    rpt.validate_report_data(payload)
+    assert payload["method"] == "lmr"
+    assert payload["results"]["pruning"]["columns_pruned"] > 0
