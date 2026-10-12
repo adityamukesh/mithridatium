@@ -80,6 +80,7 @@ def test_audit_fails_when_freeeagle_results_do_not_match_schema(tmp_path, monkey
     monkeypatch.setattr("mithridatium.cli.loader.validate_model", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("mithridatium.cli.utils.dataloader_for", lambda *_args, **_kwargs: (None, DummyCfg()))
     monkeypatch.setattr("mithridatium.cli.get_device", lambda *_args, **_kwargs: torch.device("cpu"))
+    monkeypatch.setattr("mithridatium.cli.loader.ensure_defense_compatibility", lambda *_a, **_k: True)
     monkeypatch.setattr(
         "mithridatium.cli.run_freeeagle",
         lambda *_args, **_kwargs: {
@@ -140,6 +141,7 @@ def test_audit_passes_freeeagle_cli_overrides_to_config(tmp_path, monkeypatch):
     monkeypatch.setattr("mithridatium.cli.loader.validate_model", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("mithridatium.cli.utils.dataloader_for", lambda *_args, **_kwargs: (None, DummyCfg()))
     monkeypatch.setattr("mithridatium.cli.get_device", lambda *_args, **_kwargs: torch.device("cpu"))
+    monkeypatch.setattr("mithridatium.cli.loader.ensure_defense_compatibility", lambda *_a, **_k: True)
 
     captured = {}
 
