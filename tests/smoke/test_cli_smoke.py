@@ -85,6 +85,17 @@ def test_cli_repair_rejects_unknown_method():
     assert result.exit_code != 0
     assert "unsupported repair method" in result.stderr.lower()
 
+def test_cli_repair_requires_target_class():
+    result = runner.invoke(app, ["repair","--method","lmr"])
+
+    assert result.exit_code != 0
+    assert "lmr-target-class" in result.stderr.lower()
+
+def test_cli_repair_requires_prune_ratio():
+    result = runner.invoke(app,["repair","--method","lmr","--lmr-target-class","0"])
+
+    assert result.exit_code != 0
+    assert "lmr-prune-ratio" in result.stderr.lower()
 
 def test_cli_detect_help_loads():
     result = runner.invoke(app, ["detect", "--help"])
@@ -141,10 +152,23 @@ def test_cli_detect_rejects_unknown_method(tmp_path):
     assert "spectral" in result.stderr.lower()
 
 
-def test_cli_detect_scaleup_stub_writes_schema_valid_report(tmp_path):
+def test_cli_detect_scaleup_writes_schema_valid_report(tmp_path, monkeypatch):
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+
+    from mithridatium import cli
+    from mithridatium.utils import get_preprocess_config
+
     fake_model = tmp_path / "fake.pth"
     fake_model.write_bytes(b"not a real checkpoint")
     out_path = tmp_path / "detect_scaleup.json"
+
+    cfg = get_preprocess_config("cifar10")
+    data = TensorDataset(torch.randn(32, 3, 32, 32), torch.zeros(32, dtype=torch.long))
+    toy = torch.nn.Sequential(torch.nn.Flatten(), torch.nn.Linear(3 * 32 * 32, 10))
+
+    monkeypatch.setattr(cli.loader, "detect_and_build", lambda *a, **k: (toy, None))
+    monkeypatch.setattr(cli.utils, "dataloader_for", lambda *a, **k: (DataLoader(data, batch_size=16), cfg))
 
     result = runner.invoke(
         app,
@@ -170,9 +194,10 @@ def test_cli_detect_scaleup_stub_writes_schema_valid_report(tmp_path):
     results = payload["results"]
     assert results["mode"] == "input-level"
     assert results["method"] == "scaleup"
-    assert results["status"] == "stub_complete"
     assert results["num_inputs"] == 32
-    assert results["parameters"]["scales"]
+    assert len(results["per_sample"]) == 32
+    assert results["parameters"]["scales"] == [3.0, 5.0, 7.0, 9.0, 11.0]
+
 
 
 def test_cli_detect_refuses_overwrite_without_force(tmp_path):
@@ -222,3 +247,105 @@ def test_cli_audit_rejects_unknown_defense_before_running_model(tmp_path):
     assert result.exit_code != 0
     assert "unsupported" in result.stdout.lower() or "unsupported" in result.stderr.lower()
     assert "spectral" in result.stdout.lower() or "spectral" in result.stderr.lower()
+
+
+def test_cli_repair_clp_passes_arguments(tmp_path, monkeypatch):
+    """CLP should be selected and receive the requested threshold and paths."""
+    model = tmp_path / "model.pth"
+    model.write_bytes(b"placeholder")
+    out = tmp_path / "repaired.pth"
+    report = tmp_path / "clp.json"
+    calls = []
+
+    monkeypatch.setattr(
+        "mithridatium.cli.repair_clp", lambda **kwargs: calls.append(kwargs)
+    )
+    result = runner.invoke(app, [
+        "repair", "--method", "clp", "--model", str(model),
+        "--clp-threshold-mult", "1.5", "--out", str(out),
+        "--report", str(report),
+    ])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert calls == [{
+        "model_path": str(model),
+        "out": str(out),
+        "report": str(report),
+        "threshold_mult": 1.5,
+        "version": VERSION,
+    }]
+
+
+def test_cli_repair_clp_overwrite_requires_force(tmp_path, monkeypatch):
+    """An existing output is protected unless --force is provided."""
+    model = tmp_path / "model.pth"
+    model.write_bytes(b"placeholder")
+    out = tmp_path / "repaired.pth"
+    out.write_bytes(b"original")
+    report = tmp_path / "clp.json"
+    report.write_text("original", encoding="utf-8")
+    calls = []
+
+    def fake_repair(**kwargs):
+        calls.append(kwargs)
+        out.write_bytes(b"new")
+        report.write_text("new", encoding="utf-8")
+
+    monkeypatch.setattr("mithridatium.cli.repair_clp", fake_repair)
+    args = [
+        "repair", "--method", "clp", "--model", str(model),
+        "--out", str(out), "--report", str(report),
+    ]
+
+    refused = runner.invoke(app, args)
+    assert refused.exit_code == EXIT_CANT_CREATE
+    assert calls == []
+    assert out.read_bytes() == b"original"
+    assert report.read_text(encoding="utf-8") == "original"
+
+    allowed = runner.invoke(app, [*args, "--force"])
+    assert allowed.exit_code == 0, allowed.stdout + allowed.stderr
+    assert len(calls) == 1
+    assert out.read_bytes() == b"new"
+    assert report.read_text(encoding="utf-8") == "new"
+def test_cli_detect_ted_writes_schema_valid_report(tmp_path, monkeypatch):
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+
+    from mithridatium import cli
+    from mithridatium.utils import get_preprocess_config
+
+    fake_model = tmp_path / "fake.pth"
+    fake_model.write_bytes(b"not a real checkpoint")
+    out_path = tmp_path / "detect_ted.json"
+
+    toy = torch.nn.Sequential(
+        torch.nn.Conv2d(3, 4, 3, padding=1), torch.nn.ReLU(),
+        torch.nn.Flatten(), torch.nn.Linear(4 * 8 * 8, 3),
+    ).eval()
+    x = torch.randn(150, 3, 8, 8, generator=torch.Generator().manual_seed(0))
+
+    with torch.no_grad():
+        y = toy(x).argmax(1)
+        # Upstream's TED code assumes every predicted class has at least two
+        # reference samples, so drop classes the untrained toy predicts only once.
+        keep = torch.bincount(y, minlength=3)[y] >= 2
+        x, y = x[keep], y[keep]
+
+    data = TensorDataset(x, y)
+    cfg = get_preprocess_config("cifar10")
+
+    monkeypatch.setattr(cli.loader, "detect_and_build", lambda *a, **k: (toy, None))
+    monkeypatch.setattr(cli.utils, "dataloader_for", lambda *a, **k: (DataLoader(data, batch_size=16), cfg))
+
+    result = runner.invoke(app, [
+        "detect", "--model", str(fake_model), "--method", "ted", "--data", "cifar10",
+        "--ted-num-samples", "10", "--ted-reference-size", "150",
+        "--ted-contamination", "0.1", "--out", str(out_path),
+    ])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    rpt.validate_report_data(payload)
+    assert payload["results"]["method"] == "ted"
+    assert payload["results"]["num_inputs"] == 10

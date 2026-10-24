@@ -15,6 +15,9 @@ dependencies = [
     "numpy",
     "scipy",
     "jsonschema",
+    "pyod>=1.1",
+    "scikit-learn",
+    "torchmetrics",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +25,8 @@ agent = [
     "fastmcp>=3.4,<4",
     "langchain",
     "langchain-mcp-adapters==0.3.2",
+    "python-dotenv",
+    "langchain-openai",
 ]
 hf = [
     "transformers>=4.40",
