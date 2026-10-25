@@ -5,6 +5,9 @@ torchvision
 numpy
 scipy
 jsonschema
+pyod>=1.1
+scikit-learn
+torchmetrics
 
 # Hugging Face model loading
 transformers>=4.40

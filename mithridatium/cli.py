@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 import typer
 import ast
+import math
 # from mithridatium.service import (
 #     DEFENSES,
 #     DetectionExecutionError,
@@ -24,7 +25,9 @@ from mithridatium.defenses.mmbd import get_device
 from mithridatium.loader import validate_model
 from mithridatium.defenses.aeva import run_aeva
 from mithridatium.defense_config import apply_freeeagle_cli_options
+from mithridatium.repair.clp import repair_clp
 from mithridatium.detect.scaleup import run_scaleup
+from mithridatium.detect.ted import ted
 from mithridatium.repair import run_lmr
 
 try:
@@ -41,9 +44,9 @@ EXIT_IO_ERROR = 74        # input exists but can't be opened/read
 app = typer.Typer(help="Mithridatium CLI - verify pretrained model integrity")
 
 DEFENSES = {"freeeagle", "aeva", "mmbd", "strip"}
-REPAIR_METHODS = {"lmr"}
+REPAIR_METHODS = {"lmr", "clp"}
 
-DETECT_METHODS = {"scaleup"}
+DETECT_METHODS = {"scaleup", "ted"}
 
 def _check_out_writable(out_path: str, force: bool) -> None:
     """Exit early if out_path exists and --force wasn't given. "-" (stdout) always passes."""
@@ -481,7 +484,7 @@ def detect(
             "scaleup",
             "--method",
             "-M",
-            help="The method name. E.g. 'scaleup'.",
+            help="The method name: 'scaleup' or 'ted'.",
         ),
         num_samples: str = typer.Option(
             "256",
@@ -522,7 +525,24 @@ def detect(
             "--scaleup-scales",
             help='The series of value scalars to use in scaleup, e.g. "(3,5,7,9,11)."'
 
-        )
+        ),
+        ted_num_samples: int = typer.Option(
+            256,
+            "--ted-num-samples",
+            min=1,
+            help="TED: the number of test images to score.",
+        ),
+        ted_reference_size: int = typer.Option(
+            1000,
+            "--ted-reference-size",
+            min=1,
+            help="TED: the cap on known-clean reference images, drawn from the training split.",
+        ),
+        ted_contamination: float = typer.Option(
+            0.01,
+            "--ted-contamination",
+            help="TED: the fraction of clean reference inputs the threshold rejects (alpha), within 0 < alpha <= 0.5.",
+        ),
 
 
 ):
@@ -618,14 +638,29 @@ def detect(
         typer.secho(f"Error: --scaleup-scales must include only numbers greater than 0, got {scaleup_scales}.", err=True)
         raise typer.Exit(code=EXIT_USAGE_ERROR)
 
+    """
+    Validate TED options.
+    """
+    if m == "ted":
+        if not 0 < ted_contamination <= 0.5:
+            typer.secho(f"Error: --ted-contamination must be within 0 < alpha <= 0.5, got {ted_contamination}.", err=True)
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
+
     _check_out_writable(out, force)
+
+    try:
+        cfg = utils.get_preprocess_config(data)
+    except ValueError as ex:
+        typer.secho(f"Error: {ex}", err=True)
+        raise typer.Exit(code=EXIT_USAGE_ERROR)
 
     print(f"[cli] loading model from {p}…")
 
     try:
-        cfg = utils.get_preprocess_config(data)
         mdl, _ = loader.detect_and_build(str(p), num_classes=cfg.get_num_classes())
         test_loader, config = utils.dataloader_for(data, "test", 128)
+        if m == "ted":
+            train_loader, _ = utils.dataloader_for(data, "train", 128)
     except Exception as ex:
         typer.secho(
             f"Error: failed to load model '{p}'.\nReason: {ex}",
@@ -636,15 +671,27 @@ def detect(
     print(f"[cli] running method={m}…")
 
     try:
-        results = run_scaleup(
-            mdl,
-            config,
-            num_samples=n_s,
-            threshold=scaleup_threshold_converted,
-            scales=scaleup_scales_converted,
-            device=get_device(0),
-            test_loader=test_loader,
-        )
+        if m == "ted":
+            test_ds, train_ds = test_loader.dataset, train_loader.dataset
+            results = ted(
+                mdl,
+                # 2x headroom for the misclassified images ted() drops from the reference set
+                reference_data=torch.utils.data.Subset(train_ds, range(min(len(train_ds), 2 * ted_reference_size))),
+                suspect_data=torch.utils.data.Subset(test_ds, range(min(len(test_ds), ted_num_samples))),
+                reference_size=ted_reference_size,
+                contamination=ted_contamination,
+                device=get_device(0),
+            )
+        else:
+            results = run_scaleup(
+                mdl,
+                config,
+                num_samples=n_s,
+                threshold=scaleup_threshold_converted,
+                scales=scaleup_scales_converted,
+                device=get_device(0),
+                test_loader=test_loader,
+            )
     except Exception as ex:
         typer.secho(
             f"Error: failed to run '{m}' on model {p}.\nReason: {ex}",
@@ -670,9 +717,13 @@ def detect(
         raise typer.Exit(code=EXIT_IO_ERROR)
 
     _write_json(rep, out, force)
+    if m == "ted":
+        rule = f"TED score > {results['threshold']:.4g}"
+    else:
+        rule = f"SPC > {scaleup_threshold_converted}"
     print(
         f"[detect] {results['verdict']}: {results['num_flagged']}/{results['num_inputs']} "
-        f"inputs flagged (SPC > {scaleup_threshold_converted})"
+        f"inputs flagged ({rule})"
     )
 
 
@@ -722,7 +773,7 @@ def repair(
     ),
     method: str = typer.Option(
         "lmr", "--method", "-M",
-        help="The repair method to run. E.g. 'lmr'.",
+        help="The repair method to run: 'lmr' or 'clp'.",
     ),
     data: str = typer.Option(
         "cifar10", "--data", "-d",
@@ -755,6 +806,10 @@ def repair(
     lmr_prune_ratio: float = typer.Option(
         None, "--lmr-prune-ratio",
         help="LMR: fraction of most-moved columns to prune.",
+    ),
+    clp_threshold_mult: float = typer.Option(
+        3.0, "--clp-threshold-mult",
+        help="CLP threshold multiplier u (prune channels with score > mean + u*std). Default 3.0.",
     ),
 ):
 
@@ -910,6 +965,35 @@ def repair(
         _write_json(report, str(report_path), force)
 
         typer.secho(f"\n[cli] LMR repair completed successfully. Repaired model saved to '{out}'. Report saved to '{report_path}'.", fg=typer.colors.GREEN)
+    
+    elif method == "clp":
+        if not math.isfinite(clp_threshold_mult) or clp_threshold_mult < 0:
+            typer.secho("Error: --clp-threshold-mult must be finite and nonnegative.", err=True)
+            raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+        model_path = Path(model)
+        if not model_path.exists() or not model_path.is_file():
+            typer.secho(f"Error: model path not found or not a file: {model_path}", err=True)
+            raise typer.Exit(code=EXIT_NO_INPUT)
+
+        report_path = report if report is not None else out.with_suffix(".json")
+        destinations = [out]
+        if str(report_path) != "-":
+            destinations.append(report_path)
+            if out.resolve() == report_path.resolve():
+                typer.secho("Error: checkpoint and report must have different paths.", err=True)
+                raise typer.Exit(code=EXIT_USAGE_ERROR)
+
+        for path in destinations:
+            if path.exists() and not force:
+                typer.secho(f"Error: output file already exists: {path}. Use --force to overwrite.", err=True)
+                raise typer.Exit(code=EXIT_CANT_CREATE)
+
+        try:
+            repair_clp(model_path=model, out=str(out), report=str(report_path), threshold_mult=clp_threshold_mult, version=VERSION)
+        except Exception as ex:
+            typer.secho(f"Error: failed to run CLP repair on model '{model_path}'.\nReason: {ex}", err=True)
+            raise typer.Exit(code=EXIT_IO_ERROR)
 
 if __name__ == "__main__":
     app()

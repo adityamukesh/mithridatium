@@ -3,9 +3,12 @@ import sys
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 from langchain_mcp_adapters.client import MultiServerMCPClient
+
+AUDIT_TOOLS = {"run_mmbd", "run_strip", "run_aeva", "run_freeeagle"}
 
 AUDIT_SYSTEM_PROMPT = """
 You audit image-classification checkpoints for backdoors.
@@ -34,13 +37,16 @@ def _load_mithridatium_mcp():
         }
     }
 
-async def audit_agent(model_path: str):
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
+async def audit_agent(prompt: str):
     client = MultiServerMCPClient(_load_mithridatium_mcp())
     model = init_chat_model(model="gpt-4o-mini")
-    tools = await client.get_tools()
+    tools = [tool for tool in await client.get_tools() if tool.name in AUDIT_TOOLS]
     agent = create_agent(model, tools, system_prompt=AUDIT_SYSTEM_PROMPT)
-    result = await agent.ainvoke({"messages": f"Audit {model_path}."})
+    result = await agent.ainvoke({"messages": prompt})
     return result.get("messages", [])[-1].content
 
 if __name__ == "__main__":
-    print(asyncio.run(audit_agent("models/resnet18_poison.pth")))
+    prompt = " ".join(sys.argv[1:]) or "Audit models/resnet18_poison.pth."
+    print(asyncio.run(audit_agent(prompt)))
