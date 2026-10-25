@@ -72,6 +72,8 @@ mithridatium-mcp = "mithridatium.mcp:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Test dirs have no __init__.py; importlib mode lets same-named files coexist.
+addopts = "--import-mode=importlib"
 markers = [
     "unit: fast tests for isolated functions/classes",
     "integration: tests that exercise multiple modules together",
