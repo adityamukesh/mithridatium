@@ -40,5 +40,7 @@ jobs:
             - name: Download poison checkpoint
               if: steps.model-cache.outputs.cache-hit != 'true'
               run: curl -fsSL --create-dirs -o models/resnet18_poison.pth https://huggingface.co/SuperAddi1/resnet18_poison.pth/resolve/605e2f89cf4042c60ee440cab941365b69d60776/resnet18_poison.pth
+            - name: Run spell check
+              run: codespell
             - name: Run Tests
               run: python -m pytest -q
